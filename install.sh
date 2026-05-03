@@ -1,7 +1,7 @@
 #!/bin/bash
 set -Eeuo pipefail
 
-REPO="https://github.com/hamed00019/ConfigFlow.git"
+REPO="https://github.com/KO2086/ConfigFlow.git"
 BASE_DIR="/opt/configflow"
 BASE_SERVICE="configflow"
 DIR=""
@@ -27,9 +27,9 @@ header() {
   echo -e "${C}║${N}                                                                          ${C}║${N}"
   echo -e "${C}╠══════════════════════════════════════════════════════════════════════════╣${N}"
 
-  echo -e "${C}║${N}   ${B}${G}GitHub:${N}    github.com/hamed00019/ConfigFlow                      ${C}║${N}"
-  echo -e "${C}║${N}   ${B}${G}Developer:${N} t.me/bothamedehsan                                          ${C}║${N}"
-  echo -e "${C}║${N}   ${B}${G}Channel:${N}   @bothamedehsan                                               ${C}║${N}"
+  echo -e "${C}║${N}   ${B}${G}GitHub:${N}    github.com/KO2086/ConfigFlow                      ${C}║${N}"
+  echo -e "${C}║${N}   ${B}${G}Developer:${N} t.me/NetVibe_VPN                                          ${C}║${N}"
+  echo -e "${C}║${N}   ${B}${G}Channel:${N}   @NetVibe_VPN                                               ${C}║${N}"
 
   echo -e "${C}╚══════════════════════════════════════════════════════════════════════════╝${N}"
   echo ""
