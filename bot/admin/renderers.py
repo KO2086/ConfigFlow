@@ -19,13 +19,16 @@ from ..ui.helpers import send_or_edit
 
 # ── Types & packages ───────────────────────────────────────────────────────────
 def _show_admin_types(call):
+    from ..db import is_range_package
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("➕ افزودن نوع جدید", callback_data="admin:type:add"))
     all_types = get_all_types()
     for item in all_types:
-        is_type_active = item["is_active"] if "is_active" in item.keys() else 1
+        is_type_active   = item["is_active"] if "is_active" in item.keys() else 1
         type_status_icon = "✅" if is_type_active else "❌"
-        kb.add(types.InlineKeyboardButton(f"{type_status_icon} 🧩 {item['name']}", callback_data="noop"))
+        kb.add(types.InlineKeyboardButton(
+            f"{type_status_icon} {item['name']}", callback_data="noop"
+        ))
         kb.row(
             types.InlineKeyboardButton("✏️ ویرایش", callback_data=f"admin:type:edit:{item['id']}"),
             types.InlineKeyboardButton("🗑 حذف",    callback_data=f"admin:type:del:{item['id']}"),
@@ -36,13 +39,17 @@ def _show_admin_types(call):
         ))
         packs = get_packages(type_id=item['id'], include_inactive=True)
         for p in packs:
-            pkg_active = p["active"] if "active" in p.keys() else 1
+            pkg_active      = p["active"] if "active" in p.keys() else 1
             pkg_status_icon = "✅" if pkg_active else "❌"
+            if is_range_package(p):
+                min_gb = float(p["min_gb"])
+                max_gb = float(p["max_gb"])
+                ppg    = int(p["price_per_gb"])
+                label  = f"{pkg_status_icon} 📦 {p['name']} | {min_gb}~{max_gb}GB | هر گیگ {fmt_price(ppg)}ت"
+            else:
+                label  = f"{pkg_status_icon} 📦 {p['name']} | {p['volume_gb']}GB | {fmt_price(p['price'])}ت"
             kb.row(
-                types.InlineKeyboardButton(
-                    f"{pkg_status_icon} 📦 {p['name']} | {p['volume_gb']}GB | {fmt_price(p['price'])}ت",
-                    callback_data="noop"
-                ),
+                types.InlineKeyboardButton(label, callback_data="noop"),
                 types.InlineKeyboardButton("✏️", callback_data=f"admin:pkg:edit:{p['id']}"),
                 types.InlineKeyboardButton("🗑",  callback_data=f"admin:pkg:del:{p['id']}"),
             )

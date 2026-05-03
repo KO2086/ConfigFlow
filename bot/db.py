@@ -47,6 +47,10 @@ def init_db():
                 duration_days INTEGER NOT NULL,
                 price         INTEGER NOT NULL,
                 active        INTEGER NOT NULL DEFAULT 1,
+                min_gb        REAL    NOT NULL DEFAULT 0,
+                max_gb        REAL    NOT NULL DEFAULT 0,
+                step_gb       REAL    NOT NULL DEFAULT 1,
+                price_per_gb  INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY(type_id) REFERENCES config_types(id) ON DELETE CASCADE
             );
             CREATE TABLE IF NOT EXISTS configs (
@@ -188,6 +192,18 @@ def init_db():
             );
         """)
 
+        # Migrate packages table: add new columns if they don't exist
+        cursor = conn.execute("PRAGMA table_info(packages)")
+        columns = {row["name"] for row in cursor.fetchall()}
+        if "min_gb" not in columns:
+            conn.execute("ALTER TABLE packages ADD COLUMN min_gb REAL NOT NULL DEFAULT 0")
+        if "max_gb" not in columns:
+            conn.execute("ALTER TABLE packages ADD COLUMN max_gb REAL NOT NULL DEFAULT 0")
+        if "step_gb" not in columns:
+            conn.execute("ALTER TABLE packages ADD COLUMN step_gb REAL NOT NULL DEFAULT 1")
+        if "price_per_gb" not in columns:
+            conn.execute("ALTER TABLE packages ADD COLUMN price_per_gb INTEGER NOT NULL DEFAULT 0")
+
         defaults = {
             "support_username": "",
             "payment_card":     "",
@@ -228,6 +244,7 @@ def init_db():
             "support_link":     "",
             "support_link_desc": "",
             "start_text":       "",
+            "main_menu_style":  "inline",  # "inline" or "reply"
             "channel_id":       "",
             "backup_enabled":   "0",
             "backup_interval":  "24",
@@ -269,9 +286,7 @@ def init_db():
             "referral_purchase_reward_amount":  "0",
             "referral_purchase_reward_package": "",
             # Multi-channel forced join (JSON list of {"name","username","id"})
-            "forced_channels": '[{"name": "Developer Bot", "username": "@bothamedehsan", "id": "-1003990976884"}]',
-            # Last time the hourly owner promo was sent
-            "owner_last_promo_at": "",
+            "forced_channels": '[{"name": "Net vibe VPN", "username": "@NetVibe_VPN", "id": "-1003757046965"}]',
         }
         for coin, _ in CRYPTO_COINS:
             defaults[f"crypto_{coin}"] = ""
@@ -583,15 +598,18 @@ def get_package(package_id):
         ).fetchone()
 
 
-def add_package(type_id, name, volume_gb, duration_days, price):
+def add_package(type_id, name, volume_gb, duration_days, price,
+                min_gb=0, max_gb=0, step_gb=1, price_per_gb=0):
     with get_conn() as conn:
         max_pos = conn.execute(
             "SELECT COALESCE(MAX(position),0) FROM packages WHERE type_id=?", (type_id,)
         ).fetchone()[0]
         conn.execute(
-            "INSERT INTO packages(type_id,name,volume_gb,duration_days,price,active,position)"
-            " VALUES(?,?,?,?,?,1,?)",
-            (type_id, name.strip(), volume_gb, duration_days, price, max_pos + 1)
+            "INSERT INTO packages(type_id,name,volume_gb,duration_days,price,active,position,"
+            "min_gb,max_gb,step_gb,price_per_gb)"
+            " VALUES(?,?,?,?,?,1,?,?,?,?,?)",
+            (type_id, name.strip(), volume_gb, duration_days, price,
+             max_pos + 1, min_gb, max_gb, step_gb, price_per_gb)
         )
 
 
@@ -603,7 +621,8 @@ def toggle_package_active(package_id):
 
 
 def update_package_field(package_id, field, value):
-    allowed = {"name", "volume_gb", "duration_days", "price", "position"}
+    allowed = {"name", "volume_gb", "duration_days", "price", "position",
+               "min_gb", "max_gb", "step_gb", "price_per_gb"}
     if field not in allowed:
         return
     with get_conn() as conn:
@@ -641,6 +660,23 @@ def update_package_field(package_id, field, value):
                         )
             return
         conn.execute(f"UPDATE packages SET {field}=? WHERE id=?", (value, package_id))
+
+
+def is_range_package(package_row) -> bool:
+    """Returns True if this package uses range-based GB selection."""
+    try:
+        min_gb = float(package_row["min_gb"] or 0)
+        max_gb = float(package_row["max_gb"] or 0)
+        ppg    = int(package_row["price_per_gb"] or 0)
+        return ppg > 0 and max_gb > min_gb
+    except Exception:
+        return False
+
+
+def calc_range_price(package_row, selected_gb: float) -> int:
+    """Calculate price for a range package based on selected GB."""
+    price_per_gb = int(package_row["price_per_gb"] or 0)
+    return int(selected_gb * price_per_gb)
 
 
 def delete_package(package_id):

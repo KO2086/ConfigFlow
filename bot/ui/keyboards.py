@@ -10,6 +10,14 @@ from ..helpers import is_admin, admin_has_perm
 
 
 def kb_main(user_id):
+    """Return main menu keyboard — InlineKeyboard or ReplyKeyboard based on admin setting."""
+    if setting_get("main_menu_style", "inline") == "reply":
+        return _kb_main_reply(user_id)
+    return _kb_main_inline(user_id)
+
+
+def _kb_main_inline(user_id):
+    """Classic inline-button main menu (original behaviour)."""
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.row(
         types.InlineKeyboardButton("🛒 خرید کانفیگ جدید", callback_data="buy:start"),
@@ -28,6 +36,29 @@ def kb_main(user_id):
         kb.add(types.InlineKeyboardButton("🤝 درخواست نمایندگی", callback_data="agency:request"))
     if is_admin(user_id):
         kb.add(types.InlineKeyboardButton("⚙️ ورود به پنل مدیریت", callback_data="admin:panel"))
+    return kb
+
+
+def _kb_main_reply(user_id):
+    """Reply keyboard main menu (pinned at bottom of the chat)."""
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    kb.row(
+        types.KeyboardButton("🛒 خرید کانفیگ جدید"),
+        types.KeyboardButton("📦 کانفیگ‌های من"),
+    )
+    if setting_get("free_test_enabled", "1") == "1":
+        kb.add(types.KeyboardButton("🎁 تست رایگان"))
+    kb.row(
+        types.KeyboardButton("👤 حساب کاربری"),
+        types.KeyboardButton("💳 شارژ کیف پول"),
+    )
+    if setting_get("referral_enabled", "1") == "1":
+        kb.add(types.KeyboardButton("🎁 دعوت دوستان"))
+    kb.add(types.KeyboardButton("🎧 ارتباط با پشتیبانی"))
+    if setting_get("agency_request_enabled", "1") == "1":
+        kb.add(types.KeyboardButton("🤝 درخواست نمایندگی"))
+    if is_admin(user_id):
+        kb.add(types.KeyboardButton("⚙️ ورود به پنل مدیریت"))
     return kb
 
 

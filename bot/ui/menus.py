@@ -11,6 +11,7 @@ from ..helpers import esc, fmt_price, display_username, back_button
 from ..bot_instance import bot
 from .helpers import send_or_edit
 from .keyboards import kb_main
+from ..db import setting_get as _menu_setting_get
 
 
 def show_main_menu(target):
@@ -26,7 +27,20 @@ def show_main_menu(target):
             "📞 پشتیبانی حرفه‌ای ۲۴ ساعته\n\n"
             "از منوی زیر بخش مورد نظر خود را انتخاب کنید."
         )
-    send_or_edit(target, text, kb_main(uid))
+    if _menu_setting_get("main_menu_style", "inline") == "reply":
+        # ReplyKeyboard must be a fresh send — it cannot be attached to an edited message
+        chat_id = (
+            target.message.chat.id
+            if hasattr(target, "message") and target.message
+            else target.chat.id if hasattr(target, "chat")
+            else uid
+        )
+        try:
+            bot.send_message(chat_id, text, reply_markup=kb_main(uid), parse_mode="HTML")
+        except Exception:
+            pass
+    else:
+        send_or_edit(target, text, kb_main(uid))
 
 
 def show_profile(target, user_id):

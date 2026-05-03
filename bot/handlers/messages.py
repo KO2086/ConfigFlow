@@ -105,6 +105,44 @@ def universal_handler(message):
         channel_lock_message(message)
         return
 
+    # ── Reply Keyboard routing ────────────────────────────────────────────────
+    # When main_menu_style == "reply", tapping a bottom-bar button sends its
+    # text as a normal message. We intercept it here and forward it to the
+    # same callback handler so zero logic is duplicated.
+    if setting_get("main_menu_style", "inline") == "reply" and message.content_type == "text":
+        _REPLY_ROUTES = {
+            "🛒 خرید کانفیگ جدید":   "buy:start",
+            "📦 کانفیگ‌های من":        "my_configs",
+            "🎁 تست رایگان":           "test:start",
+            "👤 حساب کاربری":          "profile",
+            "💳 شارژ کیف پول":         "wallet:charge",
+            "🎁 دعوت دوستان":          "referral:menu",
+            "🎧 ارتباط با پشتیبانی":   "support",
+            "🤝 درخواست نمایندگی":     "agency:request",
+            "⚙️ ورود به پنل مدیریت":   "admin:panel",
+        }
+        _cb_data = _REPLY_ROUTES.get(message.text or "", "")
+        if _cb_data:
+            from .callbacks import on_callback as _on_cb
+            class _FakeCall:
+                def __init__(self, msg, cb):
+                    self.id          = 0
+                    self.from_user   = msg.from_user
+                    self.message     = msg
+                    self.data        = cb
+                    self.json_string = ""
+            # answer_callback_query(0) raises ApiException for fake calls.
+            # Temporarily replace it with a no-op so the real action still runs.
+            _orig_acq = bot.answer_callback_query
+            bot.answer_callback_query = lambda *_a, **_kw: None
+            try:
+                _on_cb(_FakeCall(message, _cb_data))
+            except Exception:
+                pass
+            finally:
+                bot.answer_callback_query = _orig_acq
+            return
+
     sn = state_name(uid)
     sd = state_data(uid)
 
@@ -457,11 +495,75 @@ def universal_handler(message):
             _show_admin_types(message)
             return
 
+
+        if sn == "admin_pkg_torange_min" and is_admin(uid):
+            val = parse_volume(message.text or "")
+            if val is None or val < 0:
+                bot.send_message(uid, "⚠️ حداقل گیگ معتبر وارد کنید (مثال: 10).", reply_markup=back_button("admin:types"))
+                return
+            state_set(uid, "admin_pkg_torange_max", package_id=sd["package_id"], min_gb=val)
+            bot.send_message(uid, f"✅ حداقل: <b>{val} گیگ</b>\n\n📈 حداکثر گیگ را وارد کنید (مثال: 20):", reply_markup=back_button("admin:types"))
+            return
+
+        if sn == "admin_pkg_torange_max" and is_admin(uid):
+            val = parse_volume(message.text or "")
+            if val is None or val <= 0 or val <= float(sd.get("min_gb", 0)):
+                bot.send_message(uid, f"⚠️ حداکثر باید بزرگتر از حداقل ({sd.get("min_gb", 0)} گیگ) باشد.", reply_markup=back_button("admin:types"))
+                return
+            state_set(uid, "admin_pkg_torange_step", package_id=sd["package_id"], min_gb=sd["min_gb"], max_gb=val)
+            bot.send_message(uid, f"✅ حداکثر: <b>{val} گیگ</b>\n\n🔢 گام افزایش را وارد کنید (مثال: 1):", reply_markup=back_button("admin:types"))
+            return
+
+        if sn == "admin_pkg_torange_step" and is_admin(uid):
+            val = parse_volume(message.text or "")
+            if val is None or val <= 0:
+                bot.send_message(uid, "⚠️ گام معتبر وارد کنید (مثلاً 1).", reply_markup=back_button("admin:types"))
+                return
+            state_set(uid, "admin_pkg_torange_ppg", package_id=sd["package_id"], min_gb=sd["min_gb"], max_gb=sd["max_gb"], step_gb=val)
+            bot.send_message(uid, f"✅ گام: <b>{val} گیگ</b>\n\n💰 قیمت هر گیگ را به تومان وارد کنید (مثال: 3000):", reply_markup=back_button("admin:types"))
+            return
+
+        if sn == "admin_pkg_torange_ppg" and is_admin(uid):
+            val = parse_int(message.text or "")
+            if val is None or val <= 0:
+                bot.send_message(uid, "⚠️ قیمت معتبر وارد کنید.", reply_markup=back_button("admin:types"))
+                return
+            package_id = sd["package_id"]
+            min_gb     = float(sd["min_gb"])
+            max_gb     = float(sd["max_gb"])
+            step_gb    = float(sd["step_gb"])
+            update_package_field(package_id, "min_gb", min_gb)
+            update_package_field(package_id, "max_gb", max_gb)
+            update_package_field(package_id, "step_gb", step_gb)
+            update_package_field(package_id, "price_per_gb", val)
+            update_package_field(package_id, "price", 0)
+            log_admin_action(uid, f"پکیج #{package_id} به بازه‌ای تبدیل شد: {min_gb}~{max_gb}GB گام {step_gb} قیمت {val}ت/گیگ")
+            state_clear(uid)
+            bot.send_message(uid,
+                f"✅ پکیج به بازه‌ای تبدیل شد!\n\n"
+                f"📉 حداقل: {min_gb} گیگ\n"
+                f"📈 حداکثر: {max_gb} گیگ\n"
+                f"🔢 گام: {step_gb} گیگ\n"
+                f"💰 قیمت هر گیگ: {fmt_price(val)} تومان",
+                reply_markup=back_button("admin:types"))
+            _show_admin_types(message)
+            return
+
         # ── Admin: Package edit field ──────────────────────────────────────────
         if sn == "admin_edit_pkg_field" and is_admin(uid):
             field_key  = sd["field_key"]
             package_id = sd["package_id"]
-            db_field_map = {"name": "name", "price": "price", "volume": "volume_gb", "dur": "duration_days", "position": "position"}
+            db_field_map = {
+                "name":         "name",
+                "price":        "price",
+                "volume":       "volume_gb",
+                "dur":          "duration_days",
+                "position":     "position",
+                "min_gb":       "min_gb",
+                "max_gb":       "max_gb",
+                "step_gb":      "step_gb",
+                "price_per_gb": "price_per_gb",
+            }
             db_field   = db_field_map.get(field_key)
             raw        = (message.text or "").strip()
             if field_key == "name":
@@ -469,15 +571,15 @@ def universal_handler(message):
                     bot.send_message(uid, "⚠️ نام معتبر وارد کنید.", reply_markup=back_button("admin:types"))
                     return
                 update_package_field(package_id, db_field, raw)
-            elif field_key == "volume":
+            elif field_key in ("volume", "min_gb", "max_gb", "step_gb"):
                 val = parse_volume(raw)
                 if val is None:
-                    bot.send_message(uid, "⚠️ حجم معتبر وارد کنید (مثلاً <b>0.5</b> یا <b>10</b>).", reply_markup=back_button("admin:types"))
+                    bot.send_message(uid, "⚠️ عدد معتبر وارد کنید (مثلاً 0.5 یا 10).", reply_markup=back_button("admin:types"))
                     return
                 update_package_field(package_id, db_field, val)
             else:
                 val = parse_int(raw)
-                if val is None or (field_key != "position" and val < 0) or (field_key == "position" and val < 1):
+                if val is None or (field_key == "position" and val < 1) or (field_key not in ("position", "price_per_gb") and val < 0):
                     bot.send_message(uid, "⚠️ مقدار عددی معتبر وارد کنید.", reply_markup=back_button("admin:types"))
                     return
                 update_package_field(package_id, db_field, val)
@@ -1757,4 +1859,3 @@ def universal_handler(message):
         if message.text == "/start":
             return
         bot.send_message(uid, "لطفاً از دکمه‌های منو استفاده کنید.", reply_markup=kb_main(uid))
-
