@@ -90,37 +90,60 @@ def _send_range_selector(target, package_row, selected_gb: float):
     price   = calc_range_price(package_row, selected_gb)
     dur     = fmt_dur(package_row["duration_days"])
 
+    # تابع کمکی برای ساخت دکمه‌های رنگی در آپدیت جدید تلگرام
     def _styled_btn(text, cb, style=None):
         b = types.InlineKeyboardButton(text, callback_data=cb)
         if style:
             try:
-                b.json_string = _json.dumps({"text": text, "callback_data": cb, "style": style})
+                # تزریق استایل به دیکشنری دکمه برای pyTelegramBotAPI
+                b.to_dic = lambda original=b.to_dic: {**original(), "style": style}
             except Exception:
                 pass
         return b
 
     kb = types.InlineKeyboardMarkup()
+    
+    # ردیف اول (افزایش و کاهش حجم)
     kb.keyboard.append([
         _styled_btn("➖ کاهش",           f"buy:range:dec:{pkg_id}",  "danger"),
-        _styled_btn(fmt_vol(selected_gb), "noop"),
+        _styled_btn(fmt_vol(selected_gb), "noop", "primary"),
         _styled_btn("➕ افزایش",          f"buy:range:inc:{pkg_id}", "success"),
     ])
+    
+    # ردیف دوم (زمان - فقط نمایش)
+    kb.keyboard.append([
+        _styled_btn("➖ کاهش",           "noop",  "danger"),
+        _styled_btn(dur,                  "noop", "primary"),
+        _styled_btn("➕ افزایش",          "noop", "success"),
+    ])
+    
+    # ردیف سوم (تعداد - فقط نمایش)
+    kb.keyboard.append([
+        _styled_btn("➖ کاهش",           "noop",  "danger"),
+        _styled_btn("1 عدد",              "noop", "primary"),
+        _styled_btn("➕ افزایش",          "noop", "success"),
+    ])
+    
+    # دکمه تایید و پرداخت (سبز رنگ)
     kb.add(_styled_btn(
-        f"✅ تایید و پرداخت — {fmt_price(price)} تومان",
+        f"✔️ تایید و پرداخت",
         f"buy:range:confirm:{pkg_id}",
-        "primary"
+        "success"
     ))
+    
+    # دکمه بازگشت
     kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data=f"buy:t:{package_row['type_id']}"))
+    
     text = (
-        f"📦 <b>انتخاب حجم — {esc(package_row['name'])}</b>\n\n"
-        f"🔋 حجم انتخابی: <b>{fmt_vol(selected_gb)}</b>\n"
-        f"⏰ مدت: <b>{dur}</b>\n"
-        f"💰 قیمت هر گیگ: <b>{fmt_price(ppg)}</b> تومان\n"
-        f"💵 مبلغ کل: <b>{fmt_price(price)}</b> تومان\n\n"
-        f"بازه: {fmt_vol(min_gb)} تا {fmt_vol(max_gb)} — هر بار {fmt_vol(step_gb)}"
+        f"🛍 \u003cb\u003eفاکتور خرید [ {dur} {fmt_vol(selected_gb)} ]\u003c/b\u003e\\n\\n"
+        f"🔸 حجم: \u003cb\u003e{fmt_vol(selected_gb)}\u003c/b\u003e\\n"
+        f"🔹 زمان: \u003cb\u003e{dur}\u003c/b\u003e\\n\\n"
+        f"🔘 مبلغ: \u003cb\u003e{fmt_price(price)}\u003c/b\u003e تومان\\n\\n"
+        f"💡 \u003cb\u003eتوضیحات:\u003c/b\u003e\\n"
+        f"\" ویژه اختلالات جنگ با ضمانت جایگزینی.\\n\\n"
+        f"🔽 \u003cb\u003eنکته:\u003c/b\u003e در بخش سرویس‌های من در ربات می‌توانید حجم باقی‌مانده سرویس را مشاهده کنید."
     )
     send_or_edit(target, text, kb)
-
 
 def _get_bulk_page_ids(sd):
     """Return config IDs for the current page of a bulk selection state."""
@@ -2421,7 +2444,7 @@ def _send_range_selector(target, package_row, selected_gb: float):
     if data == "admin:type:add":
         state_set(uid, "admin_add_type")
         bot.answer_callback_query(call.id)
-        send_or_edit(call, "🧩 نام نوع جدید را ارسال کنید:", back_button("admin:types"))
+        send_or_edit(call, " نام نوع جدید را ارسال کنید:", back_button("admin:types"))
         return
 
     if data.startswith("admin:type:edit:"):
@@ -2730,7 +2753,7 @@ def _send_range_selector(target, package_row, selected_gb: float):
         types_list = get_all_types()
         kb = types.InlineKeyboardMarkup()
         for item in types_list:
-            kb.add(types.InlineKeyboardButton(f"🧩 {item['name']}", callback_data=f"adm:cfg:t:{item['id']}"))
+            kb.add(types.InlineKeyboardButton(f" {item['name']}", callback_data=f"adm:cfg:t:{item['id']}"))
         kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin:panel"))
         bot.answer_callback_query(call.id)
         send_or_edit(call, "📝 <b>ثبت کانفیگ</b>\n\nنوع کانفیگ را انتخاب کنید:", kb)
