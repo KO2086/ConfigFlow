@@ -5,12 +5,6 @@ Entry point for the ConfigFlow Telegram Bot.
 
 Run with:  python main.py
 """
-from telebot import apihelper
-
-apihelper.proxy = {
-    'https': 'http://127.0.0.1:10808'
-}
-
 
 
 
