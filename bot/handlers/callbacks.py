@@ -79,71 +79,159 @@ from ..admin.renderers import (
 from ..admin.backup import _send_backup
 
 
-def _send_range_selector(target, package_row, selected_gb: float):
+def _send_range_selector(target, package_row, selected_gb: float, selected_dur: int = None):
     from ..db import calc_range_price
     import json as _json
-    pkg_id  = package_row["id"]
-    min_gb  = float(package_row["min_gb"])
-    max_gb  = float(package_row["max_gb"])
-    step_gb = float(package_row["step_gb"] or 1)
-    ppg     = int(package_row["price_per_gb"])
-    price   = calc_range_price(package_row, selected_gb)
-    dur     = fmt_dur(package_row["duration_days"])
+    import requests as _requests
 
-    # تابع کمکی برای ساخت دکمه‌های رنگی در آپدیت جدید تلگرام
-    def _styled_btn(text, cb, style=None):
-        b = types.InlineKeyboardButton(text, callback_data=cb)
-        if style:
-            try:
-                # تزریق استایل به دیکشنری دکمه برای pyTelegramBotAPI
-                b.to_dic = lambda original=b.to_dic: {**original(), "style": style}
-            except Exception:
-                pass
-        return b
+    pkg_id   = package_row["id"]
+    min_gb   = float(package_row["min_gb"])
+    max_gb   = float(package_row["max_gb"])
+    step_gb  = float(package_row["step_gb"] or 1)
+    ppg      = int(package_row["price_per_gb"])
+    
+    raw_list = str(dict(package_row).get("dur_list", "30")).split(",")
+    dur_list_raw = [int(x.strip()) for x in raw_list if x.strip().isdigit()]
+    if not dur_list_raw:
+        dur_list_raw = [30]
+        
+    base_dur = dur_list_raw[0]
+    sorted_durs = sorted(list(set(dur_list_raw)))
+    
+    if selected_dur is None or selected_dur not in sorted_durs:
+        selected_dur = base_dur
 
-    kb = types.InlineKeyboardMarkup()
-    
-    # ردیف اول (افزایش و کاهش حجم)
-    kb.keyboard.append([
-        _styled_btn("➖ کاهش",           f"buy:range:dec:{pkg_id}",  "danger"),
-        _styled_btn(fmt_vol(selected_gb), "noop", "primary"),
-        _styled_btn("➕ افزایش",          f"buy:range:inc:{pkg_id}", "success"),
-    ])
-    
-    # ردیف دوم (زمان - فقط نمایش)
-    kb.keyboard.append([
-        _styled_btn("➖ کاهش",           "noop",  "danger"),
-        _styled_btn(dur,                  "noop", "primary"),
-        _styled_btn("➕ افزایش",          "noop", "success"),
-    ])
-    
-    # ردیف سوم (تعداد - فقط نمایش)
-    kb.keyboard.append([
-        _styled_btn("➖ کاهش",           "noop",  "danger"),
-        _styled_btn("1 عدد",              "noop", "primary"),
-        _styled_btn("➕ افزایش",          "noop", "success"),
-    ])
-    
-    # دکمه تایید و پرداخت (سبز رنگ)
-    kb.add(_styled_btn(
-        f"✔️ تایید و پرداخت",
-        f"buy:range:confirm:{pkg_id}",
-        "success"
-    ))
-    
-    # دکمه بازگشت
-    kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data=f"buy:t:{package_row['type_id']}"))
-    
+        
+    raw_price = calc_range_price(package_row, selected_gb, selected_dur)
+    uid = target.from_user.id if hasattr(target, "from_user") else target.chat.id
+    from ..payments import get_effective_price
+    price = get_effective_price(uid, package_row, custom_base_price=raw_price)
+
+    EMOJI_MINUS  = "5447644880824181073"
+    EMOJI_PLUS   = "5471952986970267163"
+    EMOJI_CHECK  = "5436040291380898084"
+    EMOJI_BACK   = "5373123633025204116"
+    EMOJI_VOL    = "5431815452437257407"
+    EMOJI_TIME   = "5462868846371186716" 
+
     text = (
-        f"🛍 \u003cb\u003eفاکتور خرید [ {dur} {fmt_vol(selected_gb)} ]\u003c/b\u003e\\n\\n"
-        f"🔸 حجم: \u003cb\u003e{fmt_vol(selected_gb)}\u003c/b\u003e\\n"
-        f"🔹 زمان: \u003cb\u003e{dur}\u003c/b\u003e\\n\\n"
-        f"🔘 مبلغ: \u003cb\u003e{fmt_price(price)}\u003c/b\u003e تومان\\n\\n"
-        f"💡 \u003cb\u003eتوضیحات:\u003c/b\u003e\\n"
-        f"\" ویژه اختلالات جنگ با ضمانت جایگزینی.\\n\\n"
-        f"🔽 \u003cb\u003eنکته:\u003c/b\u003e در بخش سرویس‌های من در ربات می‌توانید حجم باقی‌مانده سرویس را مشاهده کنید."
+        f"📦 <b>انتخاب حجم و زمان — {esc(package_row['name'])}</b>\n\n"
+        f"🔋 حجم انتخابی: <b>{fmt_vol(selected_gb)}</b>\n"
+        f"⏰ مدت انتخابی: <b>{fmt_dur(selected_dur)}</b>\n"
+        f"💰 قیمت پایه هر گیگ: <b>{fmt_price(ppg)}</b> تومان\n"
+        f"💵 مبلغ کل: <b>{fmt_price(price)}</b> تومان"
     )
-    send_or_edit(target, text, kb)
+
+    reply_markup_dict = {
+        "inline_keyboard": [
+            [
+                {
+                    "text": " کاهش حجم",
+                    "callback_data": f"buy:range:dec_vol:{pkg_id}",
+                    "icon_custom_emoji_id": EMOJI_MINUS
+                },
+                {
+                    "text": fmt_vol(selected_gb),
+                    "callback_data": "noop",
+                    "style": "primary",
+                    "icon_custom_emoji_id": EMOJI_VOL
+                },
+                {
+                    "text": " افزایش حجم",
+                    "callback_data": f"buy:range:inc_vol:{pkg_id}",
+                    "icon_custom_emoji_id": EMOJI_PLUS
+                }
+            ],
+            [
+                {
+                    "text": " کاهش زمان",
+                    "callback_data": f"buy:range:dec_dur:{pkg_id}",
+                    "icon_custom_emoji_id": EMOJI_MINUS
+                },
+                {
+                    "text": fmt_dur(selected_dur),
+                    "callback_data": "noop",
+                    "style": "primary",
+                    "icon_custom_emoji_id": EMOJI_TIME
+                },
+                {
+                    "text": " افزایش زمان",
+                    "callback_data": f"buy:range:inc_dur:{pkg_id}",
+                    "icon_custom_emoji_id": EMOJI_PLUS
+                }
+            ],
+            [
+                {
+                    "text": f" تایید و پرداخت  {fmt_price(price)} تومان",
+                    "callback_data": f"buy:range:confirm:{pkg_id}",
+                    "style": "success",
+                    "icon_custom_emoji_id": EMOJI_CHECK
+                }
+            ],
+            [
+                {
+                    "text": " بازگشت",
+                    "callback_data": f"buy:t:{package_row['type_id']}",
+                    "icon_custom_emoji_id": EMOJI_BACK
+                }
+            ]
+        ]
+    }
+
+    BASE_URL = f"https://api.telegram.org/bot{bot.token}"
+
+    def _call(method, payload):
+        payload["reply_markup"] = _json.dumps(
+            reply_markup_dict, ensure_ascii=False
+        )
+        payload["parse_mode"] = "HTML"
+        payload["disable_web_page_preview"] = True
+        resp = _requests.post(f"{BASE_URL}/{method}", json=payload, timeout=10)
+        data = resp.json()
+        if not data.get("ok"):
+            raise Exception(data.get("description", "unknown error"))
+        return data
+
+    if hasattr(target, "message"):
+        chat_id    = target.message.chat.id
+        message_id = target.message.message_id
+        try:
+            _call("editMessageText", {
+                "chat_id":    chat_id,
+                "message_id": message_id,
+                "text":       text,
+            })
+            return
+        except Exception as e1:
+            try:
+                _requests.post(f"{BASE_URL}/editMessageReplyMarkup", json={
+                    "chat_id":      chat_id,
+                    "message_id":   message_id,
+                    "reply_markup": _json.dumps(reply_markup_dict, ensure_ascii=False),
+                }, timeout=10)
+                return
+            except Exception as e2:
+                pass
+        try:
+            _call("sendMessage", {
+                "chat_id": chat_id,
+                "text":    text,
+            })
+        except Exception as e3:
+            pass
+    else:
+        chat_id = target.chat.id
+        try:
+            _call("sendMessage", {
+                "chat_id": chat_id,
+                "text":    text,
+            })
+        except Exception as e:
+            pass
+
+
+
+
 
 def _get_bulk_page_ids(sd):
     """Return config IDs for the current page of a bulk selection state."""
@@ -484,7 +572,7 @@ def _tetrapay_auto_verify(payment_id, authority, uid, chat_id, message_id, kind,
                     bot.send_message(uid, "✅ پرداخت شما تأیید شد و سرویس آماده است.",
                                      reply_markup=back_button("main"))
                 deliver_purchase_message(chat_id, purchase_id_new)
-                admin_purchase_notify("TetraPay", get_user(uid), pkg_row)
+                admin_purchase_notify("TetraPay", get_user(uid), pkg_row, get_purchase(purchase_id_new))
 
             elif kind == "renewal":
                 pkg_row = get_package(package_id)
@@ -609,7 +697,7 @@ def _tronpays_rial_auto_verify(payment_id, invoice_id, uid, chat_id, message_id,
                     bot.send_message(uid, "✅ پرداخت شما تأیید شد و سرویس آماده است.",
                                      reply_markup=back_button("main"))
                 deliver_purchase_message(chat_id, purchase_id_new)
-                admin_purchase_notify("TronPays", get_user(uid), pkg_row)
+                admin_purchase_notify("TronPays", get_user(uid), pkg_row, get_purchase(purchase_id_new))
 
             elif kind == "renewal":
                 pkg_row = get_package(package_id)
@@ -905,10 +993,10 @@ def _dispatch_callback(call, uid, data):
         if not item or item["user_id"] != uid:
             bot.answer_callback_query(call.id, "دسترسی مجاز نیست.", show_alert=True)
             return
-        # Show packages of same type for renewal
+                # Show packages of same type for renewal
         with get_conn() as conn:
             type_id = conn.execute("SELECT type_id FROM packages WHERE id=?", (item["package_id"],)).fetchone()["type_id"]
-        packages = [p for p in get_packages(type_id=type_id) if p["price"] > 0]
+        packages = [p for p in get_packages(type_id=type_id) if p["price"] > 0 or int(p["price_per_gb"] or 0) > 0] #جدید
         kb = types.InlineKeyboardMarkup()
         user = get_user(uid)
         for p in packages:
@@ -1373,9 +1461,11 @@ def _dispatch_callback(call, uid, data):
         has_any = False
         for item in items:
             if stock_only:
-                packs = [p for p in get_packages(type_id=item['id']) if p['price'] > 0 and p['stock'] > 0]
+                packs = [p for p in get_packages(type_id=item['id']) if (p['price'] > 0 or int(p["price_per_gb"] or 0) > 0) and p['stock'] > 0]
             else:
-                packs = [p for p in get_packages(type_id=item['id']) if p['price'] > 0]
+                packs = [p for p in get_packages(type_id=item['id']) if p['price'] > 0 or int(p["price_per_gb"] or 0) > 0]
+            
+
             if packs:
                 kb.add(types.InlineKeyboardButton(f"🚀 {item['name']}", callback_data=f"buy:t:{item['id']}"))
                 has_any = True
@@ -1397,7 +1487,7 @@ def _dispatch_callback(call, uid, data):
         kb   = types.InlineKeyboardMarkup()
         user = get_user(uid)
         for p in packages:
-            from .db import is_range_package
+            from ..db import is_range_package
             if is_range_package(p):
                 min_gb = float(p["min_gb"])
                 max_gb = float(p["max_gb"])
@@ -1427,16 +1517,22 @@ def _dispatch_callback(call, uid, data):
         if not package_row:
             bot.answer_callback_query(call.id, "پکیج یافت نشد.", show_alert=True)
             return
-        from .db import is_range_package
+        from ..db import is_range_package
         if is_range_package(package_row):
             min_gb   = float(package_row["min_gb"])
-            selected = min_gb
+            selected_gb = min_gb
+            raw_list = str(dict(package_row).get("dur_list", "30")).split(",")
+            dur_list_raw = [int(x.strip()) for x in raw_list if x.strip().isdigit()]
+            selected_dur = dur_list_raw[0] if dur_list_raw else 30
+
             state_set(uid, "buy_range_select",
                       package_id=package_id,
-                      selected_gb=selected)
+                      selected_gb=selected_gb,
+                      selected_dur=selected_dur)
             bot.answer_callback_query(call.id)
-            _send_range_selector(call, package_row, selected)
+            _send_range_selector(call, package_row, selected_gb, selected_dur)
             return
+
         price = get_effective_price(uid, package_row)
         state_set(uid, "buy_select_method",
                   package_id=package_id, amount=price,
@@ -1488,22 +1584,56 @@ def _dispatch_callback(call, uid, data):
         if not package_row:
             bot.answer_callback_query(call.id, "پکیج یافت نشد.", show_alert=True)
             return
-        from .db import is_range_package, calc_range_price
+        from ..db import is_range_package, calc_range_price
         st       = state_data(uid)
-        selected = float(st.get("selected_gb", package_row["min_gb"]))
+        selected_gb = float(st.get("selected_gb", package_row["min_gb"]))
+        
+        raw_list = str(dict(package_row).get("dur_list", "30")).split(",")
+        dur_list_raw = [int(x.strip()) for x in raw_list if x.strip().isdigit()]
+        if not dur_list_raw:
+            dur_list_raw = [30]
+            
+        base_dur = dur_list_raw[0]
+        sorted_durs = sorted(list(set(dur_list_raw)))
+        
+        selected_dur = int(st.get("selected_dur", base_dur))
+        if selected_dur not in sorted_durs:
+            selected_dur = base_dur
+        
         min_gb   = float(package_row["min_gb"])
         max_gb   = float(package_row["max_gb"])
         step_gb  = float(package_row["step_gb"] or 1)
-        if action == "inc":
-            selected = min(selected + step_gb, max_gb)
-        elif action == "dec":
-            selected = max(selected - step_gb, min_gb)
+        
+        if action == "inc_vol":
+            if selected_gb >= max_gb:
+                bot.answer_callback_query(call.id, f"⚠️ حداکثر حجم {fmt_vol(max_gb)} است!", show_alert=False)
+            else:
+                selected_gb = min(selected_gb + step_gb, max_gb)
+        elif action == "dec_vol":
+            if selected_gb <= min_gb:
+                bot.answer_callback_query(call.id, f"⚠️ حداقل حجم {fmt_vol(min_gb)} است!", show_alert=False)
+            else:
+                selected_gb = max(selected_gb - step_gb, min_gb)
+        elif action == "inc_dur":
+            idx = sorted_durs.index(selected_dur)
+            if idx == len(sorted_durs) - 1:
+                bot.answer_callback_query(call.id, f"⚠️ حداکثر زمان انتخاب شده است!", show_alert=False)
+            else:
+                selected_dur = sorted_durs[idx + 1]
+        elif action == "dec_dur":
+            idx = sorted_durs.index(selected_dur)
+            if idx == 0:
+                bot.answer_callback_query(call.id, f"⚠️ حداقل زمان انتخاب شده است!", show_alert=False)
+            else:
+                selected_dur = sorted_durs[idx - 1]
+
         elif action == "confirm":
-            price = calc_range_price(package_row, selected)
+            price = calc_range_price(package_row, selected_gb, selected_dur)
             state_set(uid, "buy_select_method",
                       package_id=package_id,
                       amount=price,
-                      selected_gb=selected,
+                      selected_gb=selected_gb,
+                      selected_dur=selected_dur,
                       kind="config_purchase")
             _gw_labels = []
             kb = types.InlineKeyboardMarkup()
@@ -1535,8 +1665,8 @@ def _dispatch_callback(call, uid, data):
                 "💳 <b>انتخاب روش پرداخت</b>\n\n"
                 f"نوع: {esc(package_row['type_name'])}\n"
                 f"📦 پکیج: {esc(package_row['name'])}\n"
-                f"🔋 حجم: {fmt_vol(selected)}\n"
-                f"⏰ مدت: {fmt_dur(package_row['duration_days'])}\n"
+                f"🔋 حجم: {fmt_vol(selected_gb)}\n"
+                f"⏰ مدت: {fmt_dur(selected_dur)}\n"
                 f"💰 قیمت: {fmt_price(price)} تومان\n\n"
                 + (_range_guide + "\n\n" if _range_guide else "")
                 + "روش پرداخت را انتخاب کنید:"
@@ -1544,50 +1674,16 @@ def _dispatch_callback(call, uid, data):
             bot.answer_callback_query(call.id)
             send_or_edit(call, text, kb)
             return
+            
         state_set(uid, "buy_range_select",
                   package_id=package_id,
-                  selected_gb=selected)
+                  selected_gb=selected_gb,
+                  selected_dur=selected_dur)
         bot.answer_callback_query(call.id)
-        _send_range_selector(call, package_row, selected)
+        _send_range_selector(call, package_row, selected_gb, selected_dur)
         return
 
-def _send_range_selector(target, package_row, selected_gb: float):
-    from .db import calc_range_price
-    pkg_id  = package_row["id"]
-    min_gb  = float(package_row["min_gb"])
-    max_gb  = float(package_row["max_gb"])
-    step_gb = float(package_row["step_gb"] or 1)
-    ppg     = int(package_row["price_per_gb"])
-    price   = calc_range_price(package_row, selected_gb)
-    dur     = fmt_dur(package_row["duration_days"])
-    kb = types.InlineKeyboardMarkup()
-    kb.keyboard.append([
-        types.InlineKeyboardButton("➖ کاهش",
-            callback_data=f"buy:range:dec:{pkg_id}",
-            **{"style": "danger"}),
-        types.InlineKeyboardButton(f"{fmt_vol(selected_gb)}",
-            callback_data="noop"),
-        types.InlineKeyboardButton("➕ افزایش",
-            callback_data=f"buy:range:inc:{pkg_id}",
-            **{"style": "success"}),
-    ])
-    kb.add(types.InlineKeyboardButton(
-        f"✅ تایید و پرداخت — {fmt_price(price)} تومان",
-        callback_data=f"buy:range:confirm:{pkg_id}",
-        **{"style": "primary"}
-    ))
-    kb.add(types.InlineKeyboardButton("🔙 بازگشت",
-        callback_data=f"buy:t:{package_row['type_id']}"))
-    text = (
-        f"📦 <b>انتخاب حجم — {esc(package_row['name'])}</b>\n\n"
-        f"🔋 حجم انتخابی: <b>{fmt_vol(selected_gb)}</b>\n"
-        f"⏰ مدت: <b>{dur}</b>\n"
-        f"💰 قیمت هر گیگ: <b>{fmt_price(ppg)}</b> تومان\n"
-        f"💵 مبلغ کل: <b>{fmt_price(price)}</b> تومان\n\n"
-        f"بازه: {fmt_vol(min_gb)} تا {fmt_vol(max_gb)} — هر بار {fmt_vol(step_gb)}"
-    )
-    send_or_edit(target, text, kb)
-
+    
 
     if data.startswith("pay:wallet:"):
         package_id  = int(data.split(":")[2])
@@ -1600,10 +1696,15 @@ def _send_range_selector(target, package_row, selected_gb: float):
         if preorder_on and package_row["stock"] <= 0:
             bot.answer_callback_query(call.id, "موجودی این پکیج تمام شده است.", show_alert=True)
             return
-        price = get_effective_price(uid, package_row)
+        price = int(data.split(":")[3]) if len(data.split(":")) > 3 else get_effective_price(uid, package_row)#جدید
         if user["balance"] < price:
             bot.answer_callback_query(call.id, "موجودی کیف پول کافی نیست.", show_alert=True)
             return
+        
+        sd = state_data(uid)
+        selected_gb = sd.get("selected_gb")
+        selected_dur = sd.get("selected_dur")
+        
         config_id = reserve_first_config(package_id)
         if not config_id:
             if preorder_on:
@@ -1611,9 +1712,9 @@ def _send_range_selector(target, package_row, selected_gb: float):
                 return
             # preorder_mode OFF — deduct balance, create pending order, notify admin
             update_balance(uid, -price)
-            payment_id = create_payment("config_purchase", uid, package_id, price, "wallet", status="completed")
+            payment_id = create_payment("config_purchase", uid, package_id, price, "wallet", status="completed", selected_gb=selected_gb, selected_dur=selected_dur)
             complete_payment(payment_id)
-            pending_id = create_pending_order(uid, package_id, payment_id, price, "wallet")
+            pending_id = create_pending_order(uid, package_id, payment_id, price, "wallet", selected_gb=selected_gb, selected_dur=selected_dur)
             bot.answer_callback_query(call.id)
             send_or_edit(call,
                 "✅ پرداخت شما از کیف پول انجام شد.\n\n"
@@ -1625,19 +1726,19 @@ def _send_range_selector(target, package_row, selected_gb: float):
             return
         update_balance(uid, -price)
         try:
-            purchase_id = assign_config_to_user(config_id, uid, package_id, price, "wallet", is_test=0)
+            purchase_id = assign_config_to_user(config_id, uid, package_id, price, "wallet", is_test=0, selected_gb=selected_gb, selected_dur=selected_dur)
         except Exception:
             update_balance(uid, price)
             release_reserved_config(config_id)
             bot.answer_callback_query(call.id, "⚠️ خطایی رخ داد، مبلغ به کیف پول بازگردانده شد.", show_alert=True)
             return
         payment_id  = create_payment("config_purchase", uid, package_id, price, "wallet",
-                                     status="completed", config_id=config_id)
+                                     status="completed", config_id=config_id, selected_gb=selected_gb, selected_dur=selected_dur)
         complete_payment(payment_id)
         bot.answer_callback_query(call.id, "خرید با موفقیت انجام شد.")
         send_or_edit(call, "✅ خرید شما انجام شد و سرویس در پیام بعدی ارسال می‌شود.", back_button("main"))
         deliver_purchase_message(call.message.chat.id, purchase_id)
-        admin_purchase_notify("کیف پول", get_user(uid), package_row)
+        admin_purchase_notify("کیف پول", get_user(uid), package_row, get_purchase(purchase_id))
         state_clear(uid)
         return
 
@@ -1653,7 +1754,7 @@ def _send_range_selector(target, package_row, selected_gb: float):
         if not card:
             bot.answer_callback_query(call.id, "اطلاعات پرداخت هنوز ثبت نشده است.", show_alert=True)
             return
-        price      = get_effective_price(uid, package_row)
+        price = int(data.split(":")[3]) if len(data.split(":")) > 3 else get_effective_price(uid, package_row)#جدید
         if not is_gateway_in_range("card", price):
             _rng = get_gateway_range_text("card")
             bot.answer_callback_query(call.id,
@@ -1662,7 +1763,10 @@ def _send_range_selector(target, package_row, selected_gb: float):
                 "لطفاً درگاه دیگری متناسب با این مبلغ انتخاب کنید.",
                 show_alert=True)
             return
-        payment_id = create_payment("config_purchase", uid, package_id, price, "card", status="pending")
+        sd = state_data(uid)
+        selected_gb = sd.get("selected_gb")
+        selected_dur = sd.get("selected_dur")
+        payment_id = create_payment("config_purchase", uid, package_id, price, "card", status="pending", selected_gb=selected_gb, selected_dur=selected_dur)
         state_set(uid, "await_purchase_receipt", payment_id=payment_id)
         text = (
             "💳 <b>کارت به کارت</b>\n\n"
@@ -1684,7 +1788,8 @@ def _send_range_selector(target, package_row, selected_gb: float):
         if not package_row or (setting_get("preorder_mode", "0") == "1" and package_row["stock"] <= 0):
             bot.answer_callback_query(call.id, "موجودی این پکیج تمام شده است.", show_alert=True)
             return
-        price = get_effective_price(uid, package_row)
+        price = int(data.split(":")[3]) if len(data.split(":")) > 3 else get_effective_price(uid, package_row)#جدید
+
         if not is_gateway_in_range("crypto", price):
             _rng = get_gateway_range_text("crypto")
             bot.answer_callback_query(call.id,
@@ -1779,7 +1884,7 @@ def _send_range_selector(target, package_row, selected_gb: float):
                 if not config_id:
                     config_id = reserve_first_config(package_id, payment_id)
                 if not config_id:
-                    pending_id = create_pending_order(uid, package_id, payment_id, payment["amount"], "tetrapay")
+                    pending_id = create_pending_order(uid, package_id, payment_id, payment["amount"], "tetrapay", selected_gb=dict(payment).get("selected_gb"), selected_dur=dict(payment).get("selected_dur"))
                     complete_payment(payment_id)
                     bot.answer_callback_query(call.id, "✅ پرداخت تأیید شد!")
                     send_or_edit(call,
@@ -1790,12 +1895,13 @@ def _send_range_selector(target, package_row, selected_gb: float):
                     notify_pending_order_to_admins(pending_id, uid, package_row, payment["amount"], "tetrapay")
                     state_clear(uid)
                     return
-                purchase_id = assign_config_to_user(config_id, uid, package_id, payment["amount"], "tetrapay", is_test=0)
+                purchase_id = assign_config_to_user(config_id, uid, package_id, payment["amount"], "tetrapay", is_test=0, selected_gb=dict(payment).get("selected_gb"), selected_dur=dict(payment).get("selected_dur"))
+
                 complete_payment(payment_id)
                 bot.answer_callback_query(call.id, "✅ پرداخت تأیید شد!")
                 send_or_edit(call, "✅ پرداخت شما تأیید شد و سرویس آماده است.", back_button("main"))
                 deliver_purchase_message(call.message.chat.id, purchase_id)
-                admin_purchase_notify("TetraPay", get_user(uid), package_row)
+                admin_purchase_notify("TetraPay", get_user(uid), package_row, get_purchase(purchase_id))
                 state_clear(uid)
         else:
             bot.answer_callback_query(call.id, "❌ پرداخت هنوز تأیید نشده. لطفاً ابتدا پرداخت را انجام دهید.", show_alert=True)
@@ -1807,7 +1913,8 @@ def _send_range_selector(target, package_row, selected_gb: float):
         if not package_row or (setting_get("preorder_mode", "0") == "1" and package_row["stock"] <= 0):
             bot.answer_callback_query(call.id, "موجودی این پکیج تمام شده است.", show_alert=True)
             return
-        price = get_effective_price(uid, package_row)
+        price = int(data.split(":")[3]) if len(data.split(":")) > 3 else get_effective_price(uid, package_row)#جدید
+
         if not is_gateway_in_range("tetrapay", price):
             _rng = get_gateway_range_text("tetrapay")
             bot.answer_callback_query(call.id,
@@ -1881,7 +1988,7 @@ def _send_range_selector(target, package_row, selected_gb: float):
                 if not config_id:
                     config_id = reserve_first_config(package_id, payment_id)
                 if not config_id:
-                    pending_id = create_pending_order(uid, package_id, payment_id, payment["amount"], "tronpays_rial")
+                    pending_id = create_pending_order(uid, package_id, payment_id, payment["amount"], "tronpays_rial", selected_gb=payment.get("selected_gb"), selected_dur=payment.get("selected_dur"))
                     complete_payment(payment_id)
                     bot.answer_callback_query(call.id, "✅ پرداخت تأیید شد!")
                     send_or_edit(call,
@@ -1892,12 +1999,12 @@ def _send_range_selector(target, package_row, selected_gb: float):
                     notify_pending_order_to_admins(pending_id, uid, package_row, payment["amount"], "tronpays_rial")
                     state_clear(uid)
                     return
-                purchase_id = assign_config_to_user(config_id, uid, package_id, payment["amount"], "tronpays_rial", is_test=0)
+                purchase_id = assign_config_to_user(config_id, uid, package_id, payment["amount"], "tronpays_rial", is_test=0, selected_gb=payment.get("selected_gb"), selected_dur=payment.get("selected_dur"))
                 complete_payment(payment_id)
                 bot.answer_callback_query(call.id, "✅ پرداخت تأیید شد!")
                 send_or_edit(call, "✅ پرداخت شما تأیید شد و سرویس آماده است.", back_button("main"))
                 deliver_purchase_message(call.message.chat.id, purchase_id)
-                admin_purchase_notify("TronPays", get_user(uid), package_row)
+                admin_purchase_notify("TronPays", get_user(uid), package_row, get_purchase(purchase_id))
                 state_clear(uid)
         else:
             bot.answer_callback_query(call.id, "❌ پرداخت هنوز تأیید نشده. لطفاً ابتدا پرداخت را انجام دهید.", show_alert=True)
@@ -1909,7 +2016,8 @@ def _send_range_selector(target, package_row, selected_gb: float):
         if not package_row or (setting_get("preorder_mode", "0") == "1" and package_row["stock"] <= 0):
             bot.answer_callback_query(call.id, "موجودی این پکیج تمام شده است.", show_alert=True)
             return
-        price   = get_effective_price(uid, package_row)
+        price = int(data.split(":")[3]) if len(data.split(":")) > 3 else get_effective_price(uid, package_row)#جدید
+
         if not is_gateway_in_range("tronpays_rial", price):
             _rng = get_gateway_range_text("tronpays_rial")
             bot.answer_callback_query(call.id,
@@ -2254,7 +2362,7 @@ def _send_range_selector(target, package_row, selected_gb: float):
                 if not config_id:
                     config_id = reserve_first_config(package_id, payment_id)
                 if not config_id:
-                    pending_id = create_pending_order(uid, package_id, payment_id, payment["amount"], "swapwallet_crypto")
+                    pending_id = create_pending_order(uid, package_id, payment_id, payment["amount"], "swapwallet_crypto", selected_gb=payment.get("selected_gb"), selected_dur=payment.get("selected_dur"))
                     complete_payment(payment_id)
                     bot.answer_callback_query(call.id, "✅ پرداخت تأیید شد!")
                     send_or_edit(call,
@@ -2265,12 +2373,12 @@ def _send_range_selector(target, package_row, selected_gb: float):
                     notify_pending_order_to_admins(pending_id, uid, package_row, payment["amount"], "swapwallet_crypto")
                     state_clear(uid)
                     return
-                purchase_id = assign_config_to_user(config_id, uid, package_id, payment["amount"], "swapwallet_crypto", is_test=0)
+                purchase_id = assign_config_to_user(config_id, uid, package_id, payment["amount"], "swapwallet_crypto", is_test=0, selected_gb=payment.get("selected_gb"), selected_dur=payment.get("selected_dur"))
                 complete_payment(payment_id)
                 bot.answer_callback_query(call.id, "✅ پرداخت تأیید شد!")
                 send_or_edit(call, "✅ پرداخت شما تأیید شد و سرویس آماده است.", back_button("main"))
                 deliver_purchase_message(call.message.chat.id, purchase_id)
-                admin_purchase_notify("SwapWallet Crypto", get_user(uid), package_row)
+                admin_purchase_notify("SwapWallet Crypto", get_user(uid), package_row, get_purchase(purchase_id))
                 state_clear(uid)
         else:
             bot.answer_callback_query(call.id, "❌ پرداخت هنوز تأیید نشده. لطفاً ابتدا واریز را انجام دهید.", show_alert=True)
@@ -2282,7 +2390,8 @@ def _send_range_selector(target, package_row, selected_gb: float):
         if not package_row or (setting_get("preorder_mode", "0") == "1" and package_row["stock"] <= 0):
             bot.answer_callback_query(call.id, "موجودی این پکیج تمام شده است.", show_alert=True)
             return
-        price = get_effective_price(uid, package_row)
+        price = int(data.split(":")[3]) if len(data.split(":")) > 3 else get_effective_price(uid, package_row)#جدید
+
         if not is_gateway_in_range("swapwallet_crypto", price):
             _rng = get_gateway_range_text("swapwallet_crypto")
             bot.answer_callback_query(call.id,
@@ -2444,7 +2553,7 @@ def _send_range_selector(target, package_row, selected_gb: float):
     if data == "admin:type:add":
         state_set(uid, "admin_add_type")
         bot.answer_callback_query(call.id)
-        send_or_edit(call, " نام نوع جدید را ارسال کنید:", back_button("admin:types"))
+        send_or_edit(call, "🧩 نام نوع جدید را ارسال کنید:", back_button("admin:types"))
         return
 
     if data.startswith("admin:type:edit:"):
@@ -2624,7 +2733,7 @@ def _send_range_selector(target, package_row, selected_gb: float):
         if not package_row:
             bot.answer_callback_query(call.id, "پکیج یافت نشد.", show_alert=True)
             return
-        from .db import is_range_package
+        from ..db import is_range_package
         kb = types.InlineKeyboardMarkup()
         kb.add(types.InlineKeyboardButton("✏️ ویرایش نام",       callback_data=f"admin:pkg:ef:name:{package_id}"))
         kb.add(types.InlineKeyboardButton("⏰ ویرایش مدت",       callback_data=f"admin:pkg:ef:dur:{package_id}"))
@@ -2634,6 +2743,9 @@ def _send_range_selector(target, package_row, selected_gb: float):
             kb.add(types.InlineKeyboardButton("📈 حداکثر گیگ",   callback_data=f"admin:pkg:ef:max_gb:{package_id}"))
             kb.add(types.InlineKeyboardButton("🔢 گام افزایش",   callback_data=f"admin:pkg:ef:step_gb:{package_id}"))
             kb.add(types.InlineKeyboardButton("💰 قیمت هر گیگ",  callback_data=f"admin:pkg:ef:price_per_gb:{package_id}"))
+            kb.add(types.InlineKeyboardButton("⏰ لیست زمان‌ها",  callback_data=f"admin:pkg:ef:dur_list:{package_id}"))
+            kb.add(types.InlineKeyboardButton("٪ درصد تخفیف زمان",callback_data=f"admin:pkg:ef:dur_discount:{package_id}"))
+
         else:
             kb.add(types.InlineKeyboardButton("💰 ویرایش قیمت",  callback_data=f"admin:pkg:ef:price:{package_id}"))
             kb.add(types.InlineKeyboardButton("🔋 ویرایش حجم",   callback_data=f"admin:pkg:ef:volume:{package_id}"))
@@ -2683,7 +2795,11 @@ def _send_range_selector(target, package_row, selected_gb: float):
             "max_gb":       "حداکثر گیگ",
             "step_gb":      "گام افزایش (گیگ)",
             "price_per_gb": "قیمت هر گیگ (تومان)",
+            "dur_list":     "لیست زمان‌ها (مثال: 30,15,7)",
+            "dur_discount": "درصد تغییر قیمت (افزایش/کاهش)",
+
         }
+
         bot.answer_callback_query(call.id)
         send_or_edit(call,
             f"✏️ مقدار جدید برای <b>{labels.get(field_key, field_key)}</b> را وارد کنید:",
@@ -2753,7 +2869,7 @@ def _send_range_selector(target, package_row, selected_gb: float):
         types_list = get_all_types()
         kb = types.InlineKeyboardMarkup()
         for item in types_list:
-            kb.add(types.InlineKeyboardButton(f" {item['name']}", callback_data=f"adm:cfg:t:{item['id']}"))
+            kb.add(types.InlineKeyboardButton(f"🧩 {item['name']}", callback_data=f"adm:cfg:t:{item['id']}"))
         kb.add(types.InlineKeyboardButton("🔙 بازگشت", callback_data="admin:panel"))
         bot.answer_callback_query(call.id)
         send_or_edit(call, "📝 <b>ثبت کانفیگ</b>\n\nنوع کانفیگ را انتخاب کنید:", kb)
@@ -5825,10 +5941,12 @@ def _send_range_selector(target, package_row, selected_gb: float):
         kind_label  = "شارژ کیف پول" if payment["kind"] == "wallet_charge" else "خرید کانفیگ"
         pkg_text    = ""
         if package_row:
+            vol_to_show = payment["selected_gb"] if payment["selected_gb"] else package_row['volume_gb']
+            dur_to_show = payment["selected_dur"] if payment["selected_dur"] else package_row['duration_days']
             pkg_text = (
                 f"\n🧩 نوع: {esc(package_row['type_name'])}"
                 f"\n📦 پکیج: {esc(package_row['name'])}"
-                f"\n🔋 حجم: {fmt_vol(package_row['volume_gb'])} | ⏰ {fmt_dur(package_row['duration_days'])}"
+                f"\n🔋 حجم: {fmt_vol(vol_to_show)} | ⏰ {fmt_dur(dur_to_show)}"
             )
         text = (
             f"✅ <b>تأیید تراکنش</b>\n\n"
@@ -5882,10 +6000,13 @@ def _send_range_selector(target, package_row, selected_gb: float):
         kind_label = "شارژ کیف پول" if payment["kind"] == "wallet_charge" else "خرید کانفیگ"
         pkg_text   = ""
         if package_row:
+            p_dict = dict(payment)
+            vol_to_show = p_dict.get("selected_gb") or package_row['volume_gb']
+            dur_to_show = p_dict.get("selected_dur") or package_row['duration_days']
             pkg_text = (
                 f"\n🧩 نوع: {esc(package_row['type_name'])}"
                 f"\n📦 پکیج: {esc(package_row['name'])}"
-                f"\n🔋 حجم: {fmt_vol(package_row['volume_gb'])} | ⏰ {fmt_dur(package_row['duration_days'])}"
+                f"\n🔋 حجم: {fmt_vol(vol_to_show)} | ⏰ {fmt_dur(dur_to_show)}"
             )
         text = (
             f"❌ <b>رد تراکنش</b>\n\n"
@@ -5939,12 +6060,17 @@ def _send_range_selector(target, package_row, selected_gb: float):
         pkg = get_package(p_row["package_id"])
         pkg_info = ""
         if pkg:
+            p_row_dict = dict(p_row) # تبدیل به دیکشنری
+            payment = get_payment(p_row_dict.get("payment_id")) if p_row_dict.get("payment_id") else None
+            p_dict = dict(payment) if payment else {}
+            vol_to_show = p_dict.get("selected_gb") or pkg['volume_gb']
+            dur_to_show = p_dict.get("selected_dur") or pkg['duration_days']
             pkg_info = (
                 f"\n\n📦 <b>اطلاعات پکیج:</b>\n"
                 f"🧩 نوع: {esc(pkg['type_name'])}\n"
                 f"✏️ نام: {esc(pkg['name'])}\n"
-                f"🔋 حجم: {fmt_vol(pkg['volume_gb'])}\n"
-                f"⏰ مدت: {fmt_dur(pkg['duration_days'])}\n"
+                f"🔋 حجم: {fmt_vol(vol_to_show)}\n"
+                f"⏰ مدت: {fmt_dur(dur_to_show)}\n"
                 f"💰 قیمت: {fmt_price(pkg['price'])} تومان"
             )
         send_or_edit(call,

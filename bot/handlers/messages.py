@@ -432,32 +432,128 @@ def universal_handler(message):
             return
 
         # ── Admin: Package add ─────────────────────────────────────────────────
+                # ── Admin: Package add ─────────────────────────────────────────────────
         if sn == "admin_add_package_name" and is_admin(uid):
             name = (message.text or "").strip()
             if not name:
                 bot.send_message(uid, "⚠️ نام پکیج معتبر وارد کنید.", reply_markup=back_button("admin:types"))
                 return
-            state_set(uid, "admin_add_package_volume", type_id=sd["type_id"], package_name=name)
+            state_set(uid, "admin_add_package_min_gb", type_id=sd["type_id"], package_name=name)
             bot.send_message(uid,
-                "🔋 حجم پکیج را به گیگ وارد کنید:\n"
-                "💡 برای حجم نامحدود عدد <b>0</b> بفرستید.\n"
-                "💡 برای کمتر از ۱ گیگ اعشار وارد کنید (مثلاً <b>0.5</b>).",
+                "📉 <b>حداقل حجم پکیج</b> را به گیگ وارد کنید (مثال: 1):\n"
+                "💡 برای حجم نامحدود عدد 0 بفرستید.\n"
+                "💡 اگر پکیج بازه‌ای نیست، حجم ثابت را اینجا وارد کنید.",
                 reply_markup=back_button("admin:types"))
             return
 
-        if sn == "admin_add_package_volume" and is_admin(uid):
-            volume = parse_volume(message.text or "")
-            if volume is None:
+        if sn == "admin_add_package_min_gb" and is_admin(uid):
+            min_gb = parse_volume(message.text or "")
+            if min_gb is None:
                 bot.send_message(uid, "⚠️ حجم معتبر وارد کنید.", reply_markup=back_button("admin:types"))
                 return
-            vol_label = "حجم نامحدود" if volume == 0 else fmt_vol(volume)
-            state_set(uid, "admin_add_package_duration",
-                      type_id=sd["type_id"], package_name=sd["package_name"], volume=volume)
+            state_set(uid, "admin_add_package_max_gb", type_id=sd["type_id"], package_name=sd["package_name"], min_gb=min_gb)
             bot.send_message(uid,
-                f"✅ حجم: <b>{vol_label}</b>\n\n"
-                "⏰ مدت پکیج را به روز وارد کنید:\n"
-                "💡 برای بدون محدودیت زمانی عدد <b>0</b> بفرستید.",
+                "📈 <b>حداکثر حجم پکیج</b> را به گیگ وارد کنید (مثال: 10):\n"
+                "💡 اگر پکیج ثابت است و بازه‌ای نیست، همان مقدار قبلی را وارد کنید.",
                 reply_markup=back_button("admin:types"))
+            return
+
+        if sn == "admin_add_package_max_gb" and is_admin(uid):
+            max_gb = parse_volume(message.text or "")
+            if max_gb is None or max_gb < float(sd["min_gb"]):
+                bot.send_message(uid, "⚠️ حجم معتبر و بزرگتر یا مساوی حداقل وارد کنید.", reply_markup=back_button("admin:types"))
+                return
+            state_set(uid, "admin_add_package_step_gb", type_id=sd["type_id"], package_name=sd["package_name"], min_gb=sd["min_gb"], max_gb=max_gb)
+            bot.send_message(uid,
+                "🔢 <b>گام افزایش حجم</b> را وارد کنید (مثلاً 1 یا 0.5):\n"
+                "💡 اگر پکیج ثابت است، عدد 1 را بفرستید.",
+                reply_markup=back_button("admin:types"))
+            return
+
+        if sn == "admin_add_package_step_gb" and is_admin(uid):
+            step_gb = parse_volume(message.text or "")
+            if step_gb is None or step_gb <= 0:
+                bot.send_message(uid, "⚠️ گام معتبر وارد کنید.", reply_markup=back_button("admin:types"))
+                return
+            state_set(uid, "admin_add_package_price_per_gb", type_id=sd["type_id"], package_name=sd["package_name"], min_gb=sd["min_gb"], max_gb=sd["max_gb"], step_gb=step_gb)
+            bot.send_message(uid,
+                "💰 <b>قیمت هر گیگ</b> را به تومان وارد کنید (مثال: 5000):\n"
+                "💡 اگر پکیج ثابت است، قیمت کل پکیج را اینجا وارد کنید.",
+                reply_markup=back_button("admin:types"))
+            return
+
+        if sn == "admin_add_package_price_per_gb" and is_admin(uid):
+            price_per_gb = parse_int(message.text or "")
+            if price_per_gb is None or price_per_gb < 0:
+                bot.send_message(uid, "⚠️ قیمت معتبر وارد کنید.", reply_markup=back_button("admin:types"))
+                return
+            
+            if sd["min_gb"] != sd["max_gb"]:
+                # پکیج بازه‌ای است، لیست زمان‌ها را بپرسیم
+                state_set(uid, "admin_add_package_dur_list", type_id=sd["type_id"], package_name=sd["package_name"], min_gb=sd["min_gb"], max_gb=sd["max_gb"], step_gb=sd["step_gb"], price_per_gb=price_per_gb)
+                bot.send_message(uid,
+                    "⏰ <b>لیست زمان‌ها</b> را با کاما وارد کنید (مثال: 30,60,90 یا 30,15,7):\n"
+                    "💡 اولین عدد به عنوان زمان پایه در نظر گرفته می‌شود.",
+                    reply_markup=back_button("admin:types"))
+            else:
+                # پکیج ثابت است
+                state_set(uid, "admin_add_package_duration", type_id=sd["type_id"], package_name=sd["package_name"], min_gb=sd["min_gb"], max_gb=sd["max_gb"], step_gb=sd["step_gb"], price_per_gb=price_per_gb)
+                bot.send_message(uid,
+                    "⏰ <b>مدت پکیج</b> را به روز وارد کنید (مثال: 30):\n"
+                    "💡 برای بدون محدودیت زمانی عدد 0 بفرستید.",
+                    reply_markup=back_button("admin:types"))
+            return
+
+        if sn == "admin_add_package_dur_list" and is_admin(uid):
+            dur_list = (message.text or "").strip()
+            if not dur_list:
+                bot.send_message(uid, "⚠️ لیست زمان‌ها نمی‌تواند خالی باشد.", reply_markup=back_button("admin:types"))
+                return
+            state_set(uid, "admin_add_package_dur_discount", type_id=sd["type_id"], package_name=sd["package_name"], min_gb=sd["min_gb"], max_gb=sd["max_gb"], step_gb=sd["step_gb"], price_per_gb=sd["price_per_gb"], dur_list=dur_list)
+            bot.send_message(uid,
+                "٪ <b>درصد تغییر قیمت زمان</b> را وارد کنید (مثال: 20):\n"
+                "💡 این درصد برای زمان‌های بیشتر اضافه و برای زمان‌های کمتر از قیمت پایه کسر می‌شود.",
+                reply_markup=back_button("admin:types"))
+            return
+
+        if sn == "admin_add_package_dur_discount" and is_admin(uid):
+            dur_discount = parse_int(message.text or "0")
+            if dur_discount is None or dur_discount < 0:
+                bot.send_message(uid, "⚠️ درصد معتبر وارد کنید.", reply_markup=back_button("admin:types"))
+                return
+            
+            dur_list_arr = [int(x.strip()) for x in sd["dur_list"].split(",") if x.strip().isdigit()]
+            duration = dur_list_arr[0] if dur_list_arr else 30
+            
+            pkg_id = add_package(sd["type_id"], sd["package_name"], sd["min_gb"], duration, 0,
+                                 sd["min_gb"], sd["max_gb"], sd["step_gb"], sd["price_per_gb"],
+                                 sd["dur_list"], dur_discount)
+            
+            if not pkg_id:
+                from ..db import get_packages
+                pkgs = get_packages(sd["type_id"])
+                if pkgs:
+                    pkg_id = pkgs[-1]["id"]
+            
+            if pkg_id:
+                update_package_field(pkg_id, "min_gb", sd["min_gb"])
+                update_package_field(pkg_id, "max_gb", sd["max_gb"])
+                update_package_field(pkg_id, "step_gb", sd["step_gb"])
+                update_package_field(pkg_id, "price_per_gb", sd["price_per_gb"])
+                update_package_field(pkg_id, "dur_list", sd["dur_list"])
+                update_package_field(pkg_id, "dur_discount", dur_discount)
+
+            log_admin_action(uid, f"پکیج بازه‌ای '{sd['package_name']}' ثبت شد")
+            state_clear(uid)
+            
+            bot.send_message(uid,
+                f"✅ پکیج بازه‌ای با موفقیت ثبت شد.\n\n"
+                f"📦 <b>{esc(sd['package_name'])}</b>\n"
+                f"🔋 حجم: {fmt_vol(sd['min_gb'])} تا {fmt_vol(sd['max_gb'])}\n"
+                f"⏰ زمان‌ها: {sd['dur_list']} روز\n"
+                f"💰 قیمت پایه هر گیگ: {fmt_price(sd['price_per_gb'])} تومان\n"
+                f"٪ درصد تغییر زمان: {dur_discount}٪")
+            _show_admin_types(message)
             return
 
         if sn == "admin_add_package_duration" and is_admin(uid):
@@ -465,27 +561,35 @@ def universal_handler(message):
             if duration is None or duration < 0:
                 bot.send_message(uid, "⚠️ مدت معتبر وارد کنید.", reply_markup=back_button("admin:types"))
                 return
-            dur_label = "زمان نامحدود" if duration == 0 else f"{duration} روز"
-            state_set(uid, "admin_add_package_price",
-                      type_id=sd["type_id"], package_name=sd["package_name"],
-                      volume=sd["volume"], duration=duration)
-            bot.send_message(uid,
-                f"✅ مدت: <b>{dur_label}</b>\n\n"
-                "💰 قیمت پکیج را به تومان وارد کنید.\nبرای تست رایگان عدد <b>0</b> بفرستید:",
-                reply_markup=back_button("admin:types"))
-            return
+            
+            # ثبت پکیج در دیتابیس
+            # اگر پکیج ثابت است، قیمت کل همان price_per_gb در نظر گرفته می‌شود
+            fixed_price = sd["price_per_gb"] if sd["min_gb"] == sd["max_gb"] else 0
+            
+            # ساخت پکیج اولیه
+            pkg_id = add_package(sd["type_id"], sd["package_name"], sd["min_gb"], duration, fixed_price)
+            
+            # اگر تابع add_package آیدی برنمی‌گرداند، از دیتابیس آخرین پکیج را می‌گیریم
+            if not pkg_id:
+                from ..db import get_packages
+                pkgs = get_packages(sd["type_id"])
+                if pkgs:
+                    pkg_id = pkgs[-1]["id"]
+            
+            # آپدیت مقادیر بازه‌ای
+            if pkg_id:
+                update_package_field(pkg_id, "min_gb", sd["min_gb"])
+                update_package_field(pkg_id, "max_gb", sd["max_gb"])
+                update_package_field(pkg_id, "step_gb", sd["step_gb"])
+                update_package_field(pkg_id, "price_per_gb", sd["price_per_gb"])
 
-        if sn == "admin_add_package_price" and is_admin(uid):
-            price = parse_int(message.text or "")
-            if price is None or price < 0:
-                bot.send_message(uid, "⚠️ قیمت معتبر وارد کنید.", reply_markup=back_button("admin:types"))
-                return
-            add_package(sd["type_id"], sd["package_name"], sd["volume"], sd["duration"], price)
             log_admin_action(uid, f"پکیج '{sd['package_name']}' ثبت شد")
             state_clear(uid)
-            vol_label = "حجم نامحدود" if sd["volume"] == 0 else fmt_vol(sd["volume"])
-            dur_label = "زمان نامحدود" if sd["duration"] == 0 else f"{sd['duration']} روز"
-            pri_label = "رایگان" if price == 0 else f"{fmt_price(price)} تومان"
+            
+            vol_label = f"{fmt_vol(sd['min_gb'])} تا {fmt_vol(sd['max_gb'])}" if sd['min_gb'] != sd['max_gb'] else fmt_vol(sd['min_gb'])
+            dur_label = "زمان نامحدود" if duration == 0 else f"{duration} روز"
+            pri_label = f"هر گیگ {fmt_price(sd['price_per_gb'])} تومان" if sd['min_gb'] != sd['max_gb'] else f"{fmt_price(sd['price_per_gb'])} تومان"
+            
             bot.send_message(uid,
                 f"✅ پکیج با موفقیت ثبت شد.\n\n"
                 f"📦 <b>{esc(sd['package_name'])}</b>\n"
@@ -494,6 +598,7 @@ def universal_handler(message):
                 f"💰 قیمت: {pri_label}")
             _show_admin_types(message)
             return
+
 
 
         if sn == "admin_pkg_torange_min" and is_admin(uid):
@@ -563,12 +668,15 @@ def universal_handler(message):
                 "max_gb":       "max_gb",
                 "step_gb":      "step_gb",
                 "price_per_gb": "price_per_gb",
+                "dur_list":     "dur_list",
+                "dur_discount": "dur_discount",
             }
             db_field   = db_field_map.get(field_key)
             raw        = (message.text or "").strip()
-            if field_key == "name":
+            
+            if field_key in ("name", "dur_list"):
                 if not raw:
-                    bot.send_message(uid, "⚠️ نام معتبر وارد کنید.", reply_markup=back_button("admin:types"))
+                    bot.send_message(uid, "⚠️ مقدار معتبر وارد کنید.", reply_markup=back_button("admin:types"))
                     return
                 update_package_field(package_id, db_field, raw)
             elif field_key in ("volume", "min_gb", "max_gb", "step_gb"):
@@ -579,10 +687,11 @@ def universal_handler(message):
                 update_package_field(package_id, db_field, val)
             else:
                 val = parse_int(raw)
-                if val is None or (field_key == "position" and val < 1) or (field_key not in ("position", "price_per_gb") and val < 0):
+                if val is None or (field_key == "position" and val < 1) or (field_key not in ("position", "price_per_gb", "dur_discount") and val < 0):
                     bot.send_message(uid, "⚠️ مقدار عددی معتبر وارد کنید.", reply_markup=back_button("admin:types"))
                     return
                 update_package_field(package_id, db_field, val)
+            
             log_admin_action(uid, f"پکیج #{package_id} فیلد {field_key} ویرایش شد")
             state_clear(uid)
             package_row = get_package(package_id)
@@ -608,6 +717,7 @@ def universal_handler(message):
                 bot.send_message(uid, "✅ پکیج با موفقیت ویرایش شد.")
                 _show_admin_types(message)
             return
+
 
         # ── Admin: Config edit (inline) ────────────────────────────────────────
         if sn == "admin_cfg_edit_svc" and is_admin(uid):

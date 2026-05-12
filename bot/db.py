@@ -313,6 +313,19 @@ def init_db():
             "CREATE TABLE IF NOT EXISTS payment_admin_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, payment_id INTEGER NOT NULL, admin_id INTEGER NOT NULL, message_id INTEGER NOT NULL)",
             # v2: channel_joined tracking for referral start reward
             "ALTER TABLE referrals ADD COLUMN channel_joined INTEGER NOT NULL DEFAULT 0",
+            "ALTER TABLE packages ADD COLUMN min_gb REAL NOT NULL DEFAULT 0", #جدید برای رنج
+            "ALTER TABLE packages ADD COLUMN max_gb REAL NOT NULL DEFAULT 0",#جدید برای رنج
+            "ALTER TABLE packages ADD COLUMN step_gb REAL NOT NULL DEFAULT 1",#جدید برای رنج
+            "ALTER TABLE packages ADD COLUMN price_per_gb INTEGER NOT NULL DEFAULT 0",#جدید برای رنج
+            "ALTER TABLE packages ADD COLUMN dur_list TEXT NOT NULL DEFAULT '30'",#جدید برای رنج زمان
+            "ALTER TABLE packages ADD COLUMN dur_discount INTEGER NOT NULL DEFAULT 0",#جدید برای رنج زمان
+            "ALTER TABLE payments ADD COLUMN selected_gb REAL",
+            "ALTER TABLE payments ADD COLUMN selected_dur INTEGER",
+            "ALTER TABLE purchases ADD COLUMN selected_gb REAL",
+            "ALTER TABLE purchases ADD COLUMN selected_dur INTEGER",
+            "ALTER TABLE pending_orders ADD COLUMN selected_gb REAL",
+            "ALTER TABLE pending_orders ADD COLUMN selected_dur INTEGER",
+
         ]
         for sql in migrations:
             try:
@@ -599,18 +612,22 @@ def get_package(package_id):
 
 
 def add_package(type_id, name, volume_gb, duration_days, price,
-                min_gb=0, max_gb=0, step_gb=1, price_per_gb=0):
+                min_gb=0, max_gb=0, step_gb=1, price_per_gb=0,
+                dur_list="30", dur_discount=0):
     with get_conn() as conn:
         max_pos = conn.execute(
             "SELECT COALESCE(MAX(position),0) FROM packages WHERE type_id=?", (type_id,)
         ).fetchone()[0]
         conn.execute(
             "INSERT INTO packages(type_id,name,volume_gb,duration_days,price,active,position,"
-            "min_gb,max_gb,step_gb,price_per_gb)"
-            " VALUES(?,?,?,?,?,1,?,?,?,?,?)",
+            "min_gb,max_gb,step_gb,price_per_gb,dur_list,dur_discount)"
+            " VALUES(?,?,?,?,?,1,?,?,?,?,?,?,?)",
             (type_id, name.strip(), volume_gb, duration_days, price,
-             max_pos + 1, min_gb, max_gb, step_gb, price_per_gb)
+             max_pos + 1, min_gb, max_gb, step_gb, price_per_gb, dur_list, dur_discount)
         )
+        return conn.execute("SELECT last_insert_rowid() AS x").fetchone()["x"]
+
+
 
 
 def toggle_package_active(package_id):
@@ -622,7 +639,8 @@ def toggle_package_active(package_id):
 
 def update_package_field(package_id, field, value):
     allowed = {"name", "volume_gb", "duration_days", "price", "position",
-               "min_gb", "max_gb", "step_gb", "price_per_gb"}
+               "min_gb", "max_gb", "step_gb", "price_per_gb", "dur_list", "dur_discount"}
+
     if field not in allowed:
         return
     with get_conn() as conn:
@@ -673,10 +691,43 @@ def is_range_package(package_row) -> bool:
         return False
 
 
-def calc_range_price(package_row, selected_gb: float) -> int:
-    """Calculate price for a range package based on selected GB."""
+def calc_range_price(package_row, selected_gb: float, selected_dur: int = None) -> int:
+    """Calculate price for a range package based on selected GB and Duration."""
     price_per_gb = int(package_row["price_per_gb"] or 0)
-    return int(selected_gb * price_per_gb)
+    base_price = int(selected_gb * price_per_gb)
+    
+    pkg_dict = dict(package_row)
+    raw_list = str(pkg_dict.get("dur_list", "30")).split(",")
+    dur_list_raw = [int(x.strip()) for x in raw_list if x.strip().isdigit()]
+    
+    if not dur_list_raw:
+        dur_list_raw = [30]
+        
+    base_dur = dur_list_raw[0] # اولین عدد وارد شده، زمان پایه است
+    sorted_durs = sorted(list(set(dur_list_raw))) # مرتب‌سازی از کم به زیاد
+    
+    if selected_dur is None or selected_dur not in sorted_durs:
+        selected_dur = base_dur
+        
+    base_idx = sorted_durs.index(base_dur)
+    curr_idx = sorted_durs.index(selected_dur)
+    steps = abs(curr_idx - base_idx) # تعداد پله فاصله تا زمان پایه
+    
+    step_pct = int(pkg_dict.get("dur_discount", 0)) # درصد تغییر قیمت
+    
+    if selected_dur > base_dur:
+        # افزایش درصد به ازای هر پله زمان بیشتر
+        base_price = int(base_price * (1 + (steps * step_pct) / 100.0))
+    elif selected_dur < base_dur:
+        # کاهش درصد به ازای هر پله زمان کمتر
+        discount = min(steps * step_pct, 99) # جلوگیری از قیمت منفی
+        base_price = int(base_price * (1 - discount / 100.0))
+            
+    return base_price
+
+
+
+
 
 
 def delete_package(package_id):
@@ -796,12 +847,12 @@ def update_config_field(config_id, field, value):
         conn.execute(f"UPDATE configs SET {field}=? WHERE id=?", (value, config_id))
 
 
-def assign_config_to_user(config_id, user_id, package_id, amount, payment_method, is_test=0):
+def assign_config_to_user(config_id, user_id, package_id, amount, payment_method, is_test=0, selected_gb=None, selected_dur=None):
     with get_conn() as conn:
         conn.execute(
             "INSERT INTO purchases(user_id,package_id,config_id,amount,"
-            "payment_method,created_at,is_test) VALUES(?,?,?,?,?,?,?)",
-            (user_id, package_id, config_id, amount, payment_method, now_str(), is_test)
+            "payment_method,created_at,is_test,selected_gb,selected_dur) VALUES(?,?,?,?,?,?,?,?,?)",
+            (user_id, package_id, config_id, amount, payment_method, now_str(), is_test, selected_gb, selected_dur)
         )
         purchase_id = conn.execute(
             "SELECT last_insert_rowid() AS x"
@@ -826,7 +877,10 @@ def get_purchase(purchase_id):
     with get_conn() as conn:
         return conn.execute(
             """
-            SELECT pr.*, p.name AS package_name, p.volume_gb, p.duration_days, p.price,
+            SELECT pr.*,
+                   pr.selected_gb  AS purchase_selected_gb,
+                   pr.selected_dur AS purchase_selected_dur,
+                   p.name AS package_name, p.volume_gb, p.duration_days, p.price,
                    t.name AS type_name, t.description AS type_description,
                    c.service_name, c.config_text, c.inquiry_link, c.is_expired
             FROM purchases pr
@@ -843,7 +897,10 @@ def get_user_purchases(user_id):
     with get_conn() as conn:
         return conn.execute(
             """
-            SELECT pr.*, p.name AS package_name, p.volume_gb, p.duration_days, p.price,
+            SELECT pr.*,
+                   pr.selected_gb  AS purchase_selected_gb,
+                   pr.selected_dur AS purchase_selected_dur,
+                   p.name AS package_name, p.volume_gb, p.duration_days, p.price,
                    t.name AS type_name, t.description AS type_description,
                    c.service_name, c.config_text, c.inquiry_link, c.is_expired
             FROM purchases pr
@@ -968,16 +1025,16 @@ def get_agencies():
 
 # ── Payments ───────────────────────────────────────────────────────────────────
 def create_payment(kind, user_id, package_id, amount, payment_method,
-                   status="pending", config_id=None, crypto_coin=None):
+                   status="pending", config_id=None, crypto_coin=None,
+                   selected_gb=None, selected_dur=None):
     with get_conn() as conn:
         conn.execute(
             "INSERT INTO payments(kind,user_id,package_id,amount,payment_method,"
-            "status,created_at,config_id,crypto_coin) VALUES(?,?,?,?,?,?,?,?,?)",
+            "status,created_at,config_id,crypto_coin,selected_gb,selected_dur) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             (kind, user_id, package_id, amount, payment_method,
-             status, now_str(), config_id, crypto_coin)
+             status, now_str(), config_id, crypto_coin, selected_gb, selected_dur)
         )
         return conn.execute("SELECT last_insert_rowid() AS x").fetchone()["x"]
-
 
 def get_payment(payment_id):
     with get_conn() as conn:
@@ -1182,15 +1239,16 @@ def get_user_xui_jobs(user_id):
 
 
 # ── Pending Orders ─────────────────────────────────────────────────────────────
-def create_pending_order(user_id, package_id, payment_id, amount, payment_method):
+def create_pending_order(user_id, package_id, payment_id, amount, payment_method, selected_gb=None, selected_dur=None):
     with get_conn() as conn:
         conn.execute(
             "INSERT INTO pending_orders(user_id,package_id,payment_id,amount,"
-            "payment_method,created_at,status) VALUES(?,?,?,?,?,?,?)",
+            "payment_method,created_at,status,selected_gb,selected_dur) VALUES(?,?,?,?,?,?,?,?,?)",
             (user_id, package_id, payment_id, amount,
-             payment_method, now_str(), "waiting")
+             payment_method, now_str(), "waiting", selected_gb, selected_dur)
         )
         return conn.execute("SELECT last_insert_rowid() AS x").fetchone()["x"]
+
 
 
 def get_pending_order(pending_id):

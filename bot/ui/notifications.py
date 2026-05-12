@@ -21,8 +21,9 @@ from ..db import (
     mark_purchase_reward_given, get_referral_by_referee,
     update_balance,
     set_referral_channel_joined, try_claim_start_reward_batch,
+    get_payment, # <--- این اضافه شد
 )
-from ..helpers import esc, fmt_price
+from ..helpers import esc, fmt_price, fmt_vol, fmt_dur
 from ..bot_instance import bot
 from ..group_manager import send_to_topic
 
@@ -48,12 +49,17 @@ def deliver_purchase_message(chat_id, purchase_id):
     cfg          = item["config_text"]
     service_name = urllib.parse.unquote(item["service_name"] or "")
     expired_note = "\n\n⚠️ <b>این سرویس توسط ادمین منقضی شده است.</b>" if item["is_expired"] else ""
+
+    # استفاده از مقادیر انتخابی کاربر، در صورت نبود از پیش‌فرض پکیج
+    vol_to_show = item["purchase_selected_gb"] if item["purchase_selected_gb"] else item["volume_gb"]
+    dur_to_show = item["purchase_selected_dur"] if item["purchase_selected_dur"] else item["duration_days"]
+
     text = (
         f"✅ <b>{'تست رایگان' if item['is_test'] else 'سرویس شما آماده است'}</b>\n\n"
         f"🔮 نام سرویس: <b>{esc(service_name)}</b>\n"
         f"🧩 نوع سرویس: <b>{esc(item['type_name'])}</b>\n"
-        f"🔋 حجم: <b>{item['volume_gb']}</b> گیگ\n"
-        f"⏰ مدت: <b>{item['duration_days']}</b> روز\n\n"
+        f"🔋 حجم: <b>{fmt_vol(vol_to_show)}</b>\n"
+        f"⏰ مدت: <b>{fmt_dur(dur_to_show)}</b>\n\n"
         f"💝 <b>Config:</b>\n<code>{esc(cfg)}</code>\n\n"
         f"🔋 Volume web: {esc(item['inquiry_link'] or '-')}"
         f"{expired_note}"
@@ -96,17 +102,24 @@ def deliver_purchase_message(chat_id, purchase_id):
 
 
 # ── Admin notifications ────────────────────────────────────────────────────────
-def admin_purchase_notify(method_label, user_row, package_row):
+def admin_purchase_notify(method_label, user_row, package_row, purchase_row=None):
+    # اگر purchase_row داده شده، از مقادیر واقعی خرید استفاده کن
+    vol_to_show   = (purchase_row["purchase_selected_gb"]  if purchase_row and purchase_row["purchase_selected_gb"]
+                     else package_row["volume_gb"])
+    dur_to_show   = (purchase_row["purchase_selected_dur"] if purchase_row and purchase_row["purchase_selected_dur"]
+                     else package_row["duration_days"])
+    price_to_show = (purchase_row["amount"] if purchase_row else package_row["price"])
+
     text = (
         f"❗️ | خرید جدید ({method_label})\n\n"
         f"▫️ آیدی کاربر: <code>{user_row['user_id']}</code>\n"
         f"👨‍💼 نام: {esc(user_row['full_name'])}\n"
         f"⚡️ نام کاربری: {esc(user_row['username'] or 'ندارد')}\n"
-        f"💰 مبلغ: {fmt_price(package_row['price'])} تومان\n"
+        f"💰 مبلغ: {fmt_price(price_to_show)} تومان\n"
         f"🚦 سرور: {esc(package_row['type_name'])}\n"
         f"✏️ پکیج: {esc(package_row['name'])}\n"
-        f"🔋 حجم: {package_row['volume_gb']} گیگ\n"
-        f"⏰ مدت: {package_row['duration_days']} روز"
+        f"🔋 حجم: {fmt_vol(vol_to_show)}\n"
+        f"⏰ مدت: {fmt_dur(dur_to_show)}"
     )
     if _own_notif_on("purchase_log"):
         for admin_id in ADMIN_IDS:
@@ -178,6 +191,22 @@ def admin_renewal_notify(user_id, purchase_item, package_row, amount, method_lab
 
 def notify_pending_order_to_admins(pending_id, user_id, package_row, amount, method):
     user = get_user(user_id)
+    p_row = get_pending_order(pending_id)
+
+    vol_to_show = package_row['volume_gb']
+    dur_to_show = package_row['duration_days']
+
+    if p_row:
+        payment_id_val = p_row["payment_id"] if "payment_id" in p_row.keys() else None
+        if payment_id_val:
+            payment = get_payment(payment_id_val)
+            if payment:
+                if payment["selected_gb"]:
+                    vol_to_show = payment["selected_gb"]
+                if payment["selected_dur"]:
+                    dur_to_show = payment["selected_dur"]
+
+
     text = (
         f"⚠️ <b>سفارش در انتظار کانفیگ</b>\n\n"
         f"👤 کاربر: {esc(user['full_name'])}\n"
@@ -187,8 +216,8 @@ def notify_pending_order_to_admins(pending_id, user_id, package_row, amount, met
         f"📦 <b>پکیج:</b>\n"
         f"🧩 نوع: {esc(package_row['type_name'])}\n"
         f"✏️ نام: {esc(package_row['name'])}\n"
-        f"🔋 حجم: {package_row['volume_gb']} گیگ\n"
-        f"⏰ مدت: {package_row['duration_days']} روز\n"
+        f"🔋 حجم: {fmt_vol(vol_to_show)}\n"
+        f"⏰ مدت: {fmt_dur(dur_to_show)}\n"
         f"💰 قیمت: {fmt_price(package_row['price'])} تومان\n\n"
         "⚠️ موجودی تحویل فوری برای این پکیج تمام شده است.\n"
         "لطفاً برای این سفارش یک کانفیگ ثبت کنید:"
@@ -235,8 +264,10 @@ def _complete_pending_order(pending_id, cfg_name, cfg_text, inquiry_link):
         config_id = cur.lastrowid
     purchase_id = assign_config_to_user(
         config_id, user_id, package_id,
-        p_row["amount"], p_row["payment_method"], is_test=0
+        p_row["amount"], p_row["payment_method"], is_test=0,
+        selected_gb=dict(p_row).get("selected_gb"), selected_dur=dict(p_row).get("selected_dur")
     )
+
     fulfill_pending_order(pending_id)
     user = get_user(user_id)
     try:
@@ -249,8 +280,9 @@ def _complete_pending_order(pending_id, cfg_name, cfg_text, inquiry_link):
         pass
     deliver_purchase_message(user_id, purchase_id)
     if pkg:
-        admin_purchase_notify(p_row["payment_method"], user, pkg)
+        admin_purchase_notify(p_row["payment_method"], user, pkg, get_purchase(purchase_id))
     return True
+
 
 
 def auto_fulfill_pending_orders(package_id):
@@ -267,8 +299,10 @@ def auto_fulfill_pending_orders(package_id):
         try:
             purchase_id = assign_config_to_user(
                 cfg["id"], user_id, package_id,
-                p_row["amount"], p_row["payment_method"], is_test=0
+                p_row["amount"], p_row["payment_method"], is_test=0,
+                selected_gb=dict(p_row).get("selected_gb"), selected_dur=dict(p_row).get("selected_dur")
             )
+
             fulfill_pending_order(pending_id)
         except Exception as e:
             for admin_id in ADMIN_IDS:
@@ -298,11 +332,11 @@ def auto_fulfill_pending_orders(package_id):
             pkg  = get_package(package_id)
             user = get_user(user_id)
             if pkg and user:
-                admin_purchase_notify(p_row["payment_method"], user, pkg)
+                admin_purchase_notify(p_row["payment_method"], user, pkg, get_purchase(purchase_id))
         except Exception:
             pass
         fulfilled_count += 1
-    return fulfilled_count
+
 
 
 # ── Referral Reward Logic ──────────────────────────────────────────────────────

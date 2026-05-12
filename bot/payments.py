@@ -16,7 +16,7 @@ from .db import (
     get_all_admin_users,
     save_payment_admin_message, get_payment_admin_messages, delete_payment_admin_messages,
 )
-from .helpers import esc, fmt_price, display_username, back_button
+from .helpers import esc, fmt_price, fmt_vol, fmt_dur, display_username, back_button
 import time
 from .gateways.base import is_gateway_available, is_card_info_complete, get_gateway_range_text, is_gateway_in_range, build_gateway_range_guide
 from .gateways.crypto import fetch_crypto_prices
@@ -41,12 +41,13 @@ def _get_prices() -> dict:
 
 
 # ── Pricing ────────────────────────────────────────────────────────────────────
-def get_effective_price(user_id, package_row):
+def get_effective_price(user_id, package_row, custom_base_price=None):
     """Return discounted price for agents, else regular price."""
     user = get_user(user_id)
+    base = custom_base_price if custom_base_price is not None else package_row["price"]
     if not user or not user["is_agent"]:
-        return package_row["price"]
-    base  = package_row["price"]
+        return base#جدید
+
     cfg   = get_agency_price_config(user_id)
     mode  = cfg["price_mode"]
     if mode == "global":
@@ -215,12 +216,15 @@ def send_payment_to_admins(payment_id):
         method_label += f" ({coin_key})"
     package_text = ""
     if package_row:
+        vol_to_show = payment["selected_gb"] if payment["selected_gb"] else package_row['volume_gb']
+        dur_to_show = payment["selected_dur"] if payment["selected_dur"] else package_row['duration_days']
         package_text = (
             f"\n🧩 نوع: {esc(package_row['type_name'])}"
             f"\n📦 پکیج: {esc(package_row['name'])}"
-            f"\n🔋 حجم: {package_row['volume_gb']} گیگ"
-            f"\n⏰ مدت: {package_row['duration_days']} روز"
+            f"\n🔋 حجم: {fmt_vol(vol_to_show)}"
+            f"\n⏰ مدت: {fmt_dur(dur_to_show)}"
         )
+
     # Crypto equivalent line (shown only for crypto payments)
     crypto_line = ""
     if coin_key:
@@ -336,7 +340,8 @@ def _finish_card_payment_approval_inner(payment_id, admin_note, approved):
                 config_id = reserve_first_config(package_id, payment_id)
             if not config_id:
                 pending_id = create_pending_order(
-                    user_id, package_id, payment_id, payment["amount"], payment["payment_method"]
+                    user_id, package_id, payment_id, payment["amount"], payment["payment_method"],
+                    selected_gb=dict(payment).get("selected_gb"), selected_dur=dict(payment).get("selected_dur")
                 )
                 complete_payment(payment_id)
                 bot.send_message(
@@ -361,8 +366,10 @@ def _finish_card_payment_approval_inner(payment_id, admin_note, approved):
             try:
                 purchase_id = assign_config_to_user(
                     config_id, user_id, package_id, payment["amount"],
-                    payment["payment_method"], is_test=0
+                    payment["payment_method"], is_test=0,
+                    selected_gb=dict(payment).get("selected_gb"), selected_dur=dict(payment).get("selected_dur")
                 )
+
             except RuntimeError as e:
                 # Concurrent approval: this config was just sold to someone else.
                 # Re-reserve and try next available config.
@@ -380,7 +387,8 @@ def _finish_card_payment_approval_inner(payment_id, admin_note, approved):
                     except Exception:
                         pass
                 pending_id = create_pending_order(
-                    user_id, package_id, payment_id, payment["amount"], payment["payment_method"]
+                    user_id, package_id, payment_id, payment["amount"], payment["payment_method"],
+                    selected_gb=dict(payment).get("selected_gb"), selected_dur=dict(payment).get("selected_dur")
                 )
                 complete_payment(payment_id)
                 bot.send_message(
@@ -402,7 +410,7 @@ def _finish_card_payment_approval_inner(payment_id, admin_note, approved):
             complete_payment(payment_id)
             bot.send_message(user_id, f"✅ واریزی شما تأیید شد.\n\n{esc(admin_note)}")
             deliver_purchase_message(user_id, purchase_id)
-            admin_purchase_notify(payment["payment_method"], get_user(user_id), package_row)
+            admin_purchase_notify(payment["payment_method"], get_user(user_id), package_row, get_purchase(purchase_id))
 
         elif payment["kind"] == "renewal":
             package_id  = payment["package_id"]

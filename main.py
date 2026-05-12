@@ -1,9 +1,19 @@
 # -*- coding: utf-8 -*-
+
 """
 Entry point for the ConfigFlow Telegram Bot.
 
 Run with:  python main.py
 """
+from telebot import apihelper
+
+apihelper.proxy = {
+    'https': 'http://127.0.0.1:10808'
+}
+
+
+
+
 import threading
 
 from bot.db import init_db
@@ -55,3 +65,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
